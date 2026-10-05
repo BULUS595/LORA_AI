@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { authService } from './lib/auth'
+import { authService, billingService, profileService } from './lib/auth'
 
 const featureCards = [
   {
@@ -89,24 +89,21 @@ const faqs = [
 
 const plans = [
   {
-    name: 'Free Trial',
-    price: '₦0',
-    monthly: 0,
+    id: 'free',
+    name: 'Free',
     description: 'Explore the learning center and get comfortable with the product.',
     features: ['Basic assistant access', 'Learning path previews', 'Helpful onboarding'],
   },
   {
+    id: 'basic',
     name: 'Basic',
-    price: '₦3,950',
-    monthly: 3950,
     description: 'Built for focused day-to-day work and deeper personal productivity.',
     features: ['Full assistant access', 'Voice-ready workflows', 'Priority learning resources'],
     highlight: true,
   },
   {
+    id: 'pro',
     name: 'Pro',
-    price: '₦50,090',
-    monthly: 50090,
     description: 'Ideal for founders, teams, and professionals who need structure and speed.',
     features: ['Shared workflows', 'Business templates', 'Advanced planning support'],
   },
@@ -115,33 +112,28 @@ const plans = [
 const downloadOptions = [
   {
     platform: 'Windows',
-    note: 'Installer .exe',
-    packages: ['LORA AI Setup.exe', '.msi', '.zip'],
-    action: 'Download for Windows',
+    note: 'Coming soon',
+    action: 'Not available yet',
   },
   {
     platform: 'Mac',
-    note: 'Apple Silicon + Intel',
-    packages: ['LORA AI.dmg', '.pkg', '.zip'],
-    action: 'Download for Mac',
+    note: 'Coming soon',
+    action: 'Not available yet',
   },
   {
     platform: 'iPhone',
-    note: 'iOS app',
-    packages: ['App Store', 'TestFlight'],
-    action: 'Install on iPhone',
+    note: 'Coming soon',
+    action: 'Not available yet',
   },
   {
     platform: 'Android',
-    note: 'Android app',
-    packages: ['APK', 'AAB'],
-    action: 'Download for Android',
+    note: 'Coming soon',
+    action: 'Not available yet',
   },
   {
     platform: 'Linux',
-    note: 'Debian / RPM',
-    packages: ['.deb', '.rpm', '.AppImage'],
-    action: 'Download for Linux',
+    note: 'Coming soon',
+    action: 'Not available yet',
   },
 ]
 
@@ -152,18 +144,76 @@ const navItems = [
   { label: 'Download', href: '#download' },
 ]
 
+const answerWebsiteQuestion = (question, pageContext) => {
+  const normalized = question.toLowerCase()
+
+  if (/\b(what is lora|what does lora do|about lora)\b/.test(normalized)) {
+    return 'LORA is being built as an assistant for learning, writing, planning, and everyday work. This site currently provides product information, account setup, and plan selection.'
+  }
+  if (/\b(sign ?up|create an account|register|join)\b/.test(normalized)) {
+    return 'Choose Sign Up in the top navigation, enter your name, email, and password, then confirm your email if verification is enabled. You need an account before activating any plan.'
+  }
+  if (/\b(log ?in|sign ?in|password|reset)\b/.test(normalized)) {
+    return 'Choose Log In in the top navigation. Use Forgot password? to request a reset email. If sign-in is unavailable, the Supabase project still needs to be configured.'
+  }
+  if (/\b(plan|billing|upgrade|subscription|cancel|payment|stripe|free)\b/.test(normalized)) {
+    if (pageContext === 'billing') {
+      return 'Choose a plan below. You must be signed in first; paid checkout opens Stripe. After Stripe confirms a subscription, its webhook updates your account plan. Billing is unavailable until Stripe is configured.'
+    }
+    return 'Open your account menu and choose Billing to view your plan or manage a paid subscription. New users can select the Free plan from Pricing, but still need an account first.'
+  }
+  if (/\b(download|install|windows|mac|iphone|android|linux)\b/.test(normalized)) {
+    return 'LORA installers are not published yet. The Download section will be updated when releases are available.'
+  }
+  if (/\b(dashboard|use lora|ask lora|assistant|chat)\b/.test(normalized)) {
+    return 'The primary LORA assistant workspace is not connected in this website yet. This help chat can guide you around the current site, but it does not answer general AI questions.'
+  }
+  if (pageContext === 'billing') {
+    return 'You are viewing Pricing. Select Free, Basic, or Pro, then continue. Account creation is required before any plan is activated.'
+  }
+  if (pageContext === 'account') {
+    return 'Account settings include your profile, response-style preference, and the plan status saved for your signed-in account.'
+  }
+  return 'I can help with accounts, login, password reset, plans, billing, and downloads. What would you like to do?'
+}
+
 const socialProviders = [
-  { id: 'google', name: 'Google', mark: 'G' },
-  { id: 'apple', name: 'Apple', mark: 'A' },
-  { id: 'microsoft', name: 'Microsoft', mark: 'M' },
-  { id: 'github', name: 'GitHub', mark: 'GH' },
+  { id: 'google', name: 'Google' },
+  { id: 'apple', name: 'Apple' },
+  { id: 'microsoft', name: 'Microsoft' },
+  { id: 'github', name: 'GitHub' },
 ]
 
 function App() {
   const [copiedPrompt, setCopiedPrompt] = useState('')
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('lora-theme') === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
   const [pointer, setPointer] = useState({ x: 50, y: 32 })
   const [selectedPlan, setSelectedPlan] = useState('Basic')
-  const [checkoutMessage, setCheckoutMessage] = useState('')
+  const [checkoutMessage, setCheckoutMessage] = useState(() => {
+    const checkoutResult = new URLSearchParams(window.location.search).get('checkout')
+    if (checkoutResult === 'success') {
+      return 'Stripe Checkout returned. Your subscription will appear after Stripe confirms it; refresh Billing shortly.'
+    }
+    if (checkoutResult === 'cancelled') return 'Checkout was canceled. No plan was changed.'
+    return ''
+  })
+  const [checkoutMessageType, setCheckoutMessageType] = useState('status')
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [planCatalog, setPlanCatalog] = useState([])
+  const [currentSubscription, setCurrentSubscription] = useState(null)
+  const [accountModalOpen, setAccountModalOpen] = useState(false)
+  const [accountTab, setAccountTab] = useState('profile')
+  const [accountLoading, setAccountLoading] = useState(false)
+  const [accountError, setAccountError] = useState('')
+  const [accountMessage, setAccountMessage] = useState('')
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileForm, setProfileForm] = useState({ fullName: '', assistantStyle: 'balanced' })
   const [authMode, setAuthMode] = useState('login')
   const [authForm, setAuthForm] = useState({
     name: '',
@@ -181,6 +231,26 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [helpInput, setHelpInput] = useState('')
+  const [helpContext, setHelpContext] = useState('home')
+  const [helpMessages, setHelpMessages] = useState([
+    { role: 'assistant', text: 'Hi, I can help you find your way around LORA. Ask about accounts, plans, billing, or downloads.' },
+  ])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      localStorage.setItem('lora-theme', theme)
+    } catch {}
+  }, [theme])
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('checkout')) return
+    url.searchParams.delete('checkout')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [])
 
   useEffect(() => {
     const handleMove = (event) => {
@@ -192,27 +262,122 @@ function App() {
     const handleEscape = (event) => {
       if (event.key === 'Escape') {
         setAuthModalOpen(false)
+        setAccountModalOpen(false)
         setAccountMenuOpen(false)
+        setHelpOpen(false)
       }
     }
 
     window.addEventListener('pointermove', handleMove)
     window.addEventListener('keydown', handleEscape)
 
+    const unsubscribeAuth = authService.onAuthStateChange((user, event) => {
+      const nextUser = user
+        ? {
+            id: user.id,
+            name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'LORA user',
+            email: user.email,
+          }
+        : null
+      setCurrentUser(nextUser)
+      setIsLoggedIn(Boolean(user))
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthMode('recovery')
+        setAuthModalOpen(true)
+      }
+    })
+
     return () => {
       window.removeEventListener('pointermove', handleMove)
       window.removeEventListener('keydown', handleEscape)
+      unsubscribeAuth()
     }
   }, [])
 
+  useEffect(() => {
+    if (!authModalOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [authModalOpen])
+
+  useEffect(() => {
+    const updateContext = () => {
+      const section = window.location.hash.slice(1)
+      setHelpContext(section === 'pricing' ? 'billing' : section === 'account' ? 'account' : 'home')
+    }
+    updateContext()
+    window.addEventListener('hashchange', updateContext)
+    return () => window.removeEventListener('hashchange', updateContext)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    billingService.getPlanCatalog()
+      .then((catalog) => {
+        if (active) setPlanCatalog(catalog?.plans || [])
+      })
+      .catch(() => {
+        if (active) setPlanCatalog([])
+      })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    if (!currentUser?.id || !accountModalOpen) {
+      return () => { active = false }
+    }
+
+    Promise.all([profileService.get(), billingService.getCurrentSubscription()])
+      .then(([profile, subscription]) => {
+        if (!active) return
+        setProfileForm({
+          fullName: profile.full_name || currentUser.name,
+          assistantStyle: profile.preferences?.assistant_style || 'balanced',
+        })
+        setCurrentSubscription(subscription)
+        setAccountError('')
+      })
+      .catch((error) => {
+        if (active) setAccountError(error.message || 'Unable to load your account details.')
+      })
+      .finally(() => {
+        if (active) setAccountLoading(false)
+      })
+
+    return () => { active = false }
+  }, [accountModalOpen, currentUser?.id, currentUser?.name])
+
   const activePlan = plans.find((plan) => plan.name === selectedPlan) ?? plans[1]
+  const getPlanPrice = (plan) => {
+    if (plan.id === 'free') return { price: 'Free', period: 'No payment required' }
+    const configuredPrice = planCatalog.find((catalogPlan) => catalogPlan.id === plan.id)
+    if (!configuredPrice) return { price: 'Not configured', period: 'Billing unavailable' }
+
+    const digits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: configuredPrice.currency,
+    }).resolvedOptions().maximumFractionDigits
+    const amount = configuredPrice.amount / 10 ** digits
+    const interval = `${configuredPrice.intervalCount > 1 ? `${configuredPrice.intervalCount} ` : ''}${configuredPrice.interval}`
+    return {
+      price: new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: configuredPrice.currency,
+      }).format(amount),
+      period: `per ${interval}`,
+    }
+  }
 
   const openAuthModal = (mode = 'login') => {
     setAuthMode(mode)
+    setHelpContext(mode)
     setAuthMessage('')
     setAuthForm({ name: '', email: '', password: '', confirmPassword: '' })
     setShowPassword(false)
     setShowConfirmPassword(false)
+    setOauthLoading('')
     setAuthModalOpen(true)
     setMobileNavOpen(false)
   }
@@ -227,13 +392,33 @@ function App() {
     }
   }
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (!isLoggedIn) {
       openAuthModal('signup')
       return
     }
 
-    setCheckoutMessage('Secure checkout is not connected yet. No payment has been taken and your plan has not changed.')
+    setCheckoutLoading(true)
+    setCheckoutMessage('')
+    setCheckoutMessageType('status')
+
+    try {
+      if (activePlan.id === 'free') {
+        await billingService.activateFreePlan()
+        setCurrentSubscription(await billingService.getCurrentSubscription())
+        setCheckoutMessage('Your free account plan is active.')
+        return
+      }
+
+      const checkout = await billingService.createCheckoutSession(activePlan.id)
+      if (!checkout?.url) throw new Error('Secure checkout could not be started. Please try again.')
+      window.location.assign(checkout.url)
+    } catch (error) {
+      setCheckoutMessageType('error')
+      setCheckoutMessage(error.message || 'Billing is unavailable. Please try again.')
+    } finally {
+      setCheckoutLoading(false)
+    }
   }
 
   const handleAuthSubmit = async (event) => {
@@ -242,6 +427,48 @@ function App() {
 
     const email = authForm.email.trim()
     const password = authForm.password.trim()
+
+    if (authMode === 'reset') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setAuthMessage('Enter the email address for your account.')
+        return
+      }
+
+      setAuthLoading(true)
+      try {
+        await authService.requestPasswordReset({ email })
+        setAuthMessage('If an account exists for that email, a password reset link has been sent.')
+      } catch (error) {
+        setAuthMessage(error.message || 'Unable to send a reset link. Please try again.')
+      } finally {
+        setAuthLoading(false)
+      }
+      return
+    }
+
+    if (authMode === 'recovery') {
+      if (password.length < 8) {
+        setAuthMessage('Your password must be at least 8 characters.')
+        return
+      }
+      if (password !== authForm.confirmPassword) {
+        setAuthMessage('Passwords do not match.')
+        return
+      }
+
+      setAuthLoading(true)
+      try {
+        await authService.updatePassword({ password })
+        setAuthMode('login')
+        setAuthForm({ name: '', email: '', password: '', confirmPassword: '' })
+        setAuthMessage('Password updated. Log in with your new password.')
+      } catch (error) {
+        setAuthMessage(error.message || 'Unable to update your password. Please try again.')
+      } finally {
+        setAuthLoading(false)
+      }
+      return
+    }
 
     if (authMode === 'signup') {
       if (!authForm.name.trim()) {
@@ -289,11 +516,16 @@ function App() {
               password,
             })
 
-      const nextUser = response?.user ?? {
-        name: authForm.name.trim() || email.split('@')[0],
-        email,
+      if (!response.session) {
+        setAuthMessage('Check your email to confirm your account before continuing.')
+        return
       }
 
+      const nextUser = {
+        id: response.user.id,
+        name: response.user.user_metadata?.full_name || authForm.name.trim() || email.split('@')[0],
+        email: response.user.email || email,
+      }
       setCurrentUser(nextUser)
       setIsLoggedIn(true)
       setAuthModalOpen(false)
@@ -308,24 +540,96 @@ function App() {
     }
   }
 
-  const handleSocialAuth = (provider) => {
+  const handleSocialAuth = async (provider) => {
     setAuthMessage('')
     setOauthLoading(provider)
 
     try {
-      window.location.assign(authService.getOAuthUrl(provider))
+      await authService.startOAuth(provider)
     } catch (error) {
       setAuthMessage(error.message || 'Unable to start sign in. Please try again.')
       setOauthLoading('')
     }
   }
 
-  const handleLogout = () => {
-    setIsLoggedIn(false)
-    setCurrentUser(null)
+  const handleLogout = async () => {
+    try {
+      await authService.logout()
+      setIsLoggedIn(false)
+      setCurrentUser(null)
+      setCurrentSubscription(null)
+      setAccountMenuOpen(false)
+      setAuthModalOpen(false)
+      setAuthMessage('')
+    } catch (error) {
+      setAuthMessage(error.message || 'Unable to log out. Please try again.')
+    }
+  }
+
+  const openAccount = (tab) => {
+    setAccountTab(tab)
+    setAccountLoading(true)
+    setAccountError('')
+    setAccountMessage('')
     setAccountMenuOpen(false)
-    setAuthModalOpen(false)
-    setAuthMessage('')
+    setAccountModalOpen(true)
+  }
+
+  const handleSaveProfile = async (event) => {
+    event.preventDefault()
+    setProfileSaving(true)
+    setAccountError('')
+    setAccountMessage('')
+
+    try {
+      await profileService.update({
+        fullName: profileForm.fullName.trim(),
+        preferences: { assistant_style: profileForm.assistantStyle },
+      })
+      setCurrentUser((user) => ({ ...user, name: profileForm.fullName.trim() }))
+      setAccountMessage('Your account details are saved.')
+    } catch (error) {
+      setAccountError(error.message || 'Unable to save your account details.')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  const handleBillingPortal = async () => {
+    setCheckoutLoading(true)
+    setAccountError('')
+    try {
+      const portal = await billingService.createPortalSession()
+      if (!portal?.url) throw new Error('Billing management could not be opened.')
+      window.location.assign(portal.url)
+    } catch (error) {
+      setAccountError(error.message || 'Unable to open billing management.')
+    } finally {
+      setCheckoutLoading(false)
+    }
+  }
+
+  const handleRefreshSubscription = async () => {
+    setAccountLoading(true)
+    setAccountError('')
+    try {
+      setCurrentSubscription(await billingService.getCurrentSubscription())
+    } catch (error) {
+      setAccountError(error.message || 'Unable to refresh your plan status.')
+    } finally {
+      setAccountLoading(false)
+    }
+  }
+
+  const sendHelpMessage = (message = helpInput) => {
+    const question = message.trim()
+    if (!question) return
+    setHelpMessages((messages) => [
+      ...messages,
+      { role: 'user', text: question },
+      { role: 'assistant', text: answerWebsiteQuestion(question, helpContext) },
+    ])
+    setHelpInput('')
   }
 
   return (
@@ -372,10 +676,10 @@ function App() {
 
               {accountMenuOpen ? (
                 <div className="account-dropdown">
-                  <button type="button">My Account</button>
-                  <button type="button">Billing</button>
-                  <button type="button">Downloads</button>
-                  <button type="button">Settings</button>
+                  <button type="button" onClick={() => openAccount('profile')}>My Account</button>
+                  <button type="button" onClick={() => openAccount('billing')}>Billing</button>
+                  <a href="#download" onClick={() => setAccountMenuOpen(false)}>Downloads</a>
+                  <button type="button" onClick={() => openAccount('settings')}>Settings</button>
                   <button type="button" className="danger-action" onClick={handleLogout}>
                     Log Out
                   </button>
@@ -392,12 +696,21 @@ function App() {
               </button>
             </>
           )}
+          <button
+            type="button"
+            className="theme-toggle"
+            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+            onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')}
+          >
+            {theme === 'light' ? '🌙 Dark' : '☀ Light'}
+          </button>
         </div>
 
         <button
           type="button"
           className="mobile-menu-button"
-          aria-label="Open mobile menu"
+          aria-label={mobileNavOpen ? 'Close mobile menu' : 'Open mobile menu'}
+          aria-expanded={mobileNavOpen}
           onClick={() => setMobileNavOpen((open) => !open)}
         >
           ☰
@@ -411,28 +724,57 @@ function App() {
               {item.label}
             </a>
           ))}
-          <button type="button" className="mobile-auth-button" onClick={() => openAuthModal('login')}>
-            Log In
-          </button>
-          <button type="button" className="mobile-auth-button primary" onClick={() => openAuthModal('signup')}>
-            Sign Up
+          {isLoggedIn ? (
+            <>
+              <button type="button" className="mobile-auth-button" onClick={() => { setMobileNavOpen(false); openAccount('profile') }}>
+                My Account
+              </button>
+              <button type="button" className="mobile-auth-button primary" onClick={handleLogout}>
+                Log Out
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="mobile-auth-button" onClick={() => openAuthModal('login')}>
+                Log In
+              </button>
+              <button type="button" className="mobile-auth-button primary" onClick={() => openAuthModal('signup')}>
+                Sign Up
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="theme-toggle mobile-theme-toggle"
+            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+            onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')}
+          >
+            {theme === 'light' ? '🌙 Dark' : '☀ Light'}
           </button>
         </nav>
       ) : null}
 
       {authModalOpen ? (
-        <div className="auth-modal-backdrop" onClick={() => setAuthModalOpen(false)}>
-          <div className="auth-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="auth-modal-backdrop auth-fullscreen-backdrop" onClick={() => setAuthModalOpen(false)}>
+          <div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}>
             <button type="button" className="auth-close" aria-label="Close auth form" onClick={() => setAuthModalOpen(false)}>
               ×
             </button>
 
             <div className="auth-header">
               <span className="eyebrow">LORA account</span>
-              <h2>{authMode === 'login' ? 'Welcome back' : 'Create your LORA account'}</h2>
+              <h2 id="auth-title">
+                {authMode === 'login'
+                  ? 'Welcome back'
+                  : authMode === 'signup'
+                    ? 'Create your LORA account'
+                    : authMode === 'reset'
+                      ? 'Reset your password'
+                      : 'Choose a new password'}
+              </h2>
             </div>
 
-            <div className="auth-toggle" aria-label="Account mode switcher">
+            {authMode === 'login' || authMode === 'signup' ? <div className="auth-toggle" aria-label="Account mode switcher">
               <button
                 type="button"
                 className={authMode === 'login' ? 'auth-tab active' : 'auth-tab'}
@@ -453,7 +795,7 @@ function App() {
               >
                 Sign Up
               </button>
-            </div>
+            </div> : null}
 
             <form className="auth-form" onSubmit={handleAuthSubmit}>
               {authMode === 'signup' ? (
@@ -469,7 +811,7 @@ function App() {
                 </label>
               ) : null}
 
-              <label>
+              {authMode !== 'recovery' ? <label>
                 Email
                 <input
                   type="email"
@@ -478,30 +820,30 @@ function App() {
                   placeholder="you@example.com"
                   autoComplete="email"
                 />
-              </label>
+              </label> : null}
 
-              <label>
-                Password
+              {authMode !== 'reset' ? <label>
+                {authMode === 'recovery' ? 'New password' : 'Password'}
                 <div className="password-wrap">
                   <input
-                      type={showPassword ? 'text' : 'password'}
+                    type={showPassword ? 'text' : 'password'}
                     value={authForm.password}
                     onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
                     placeholder="••••••••"
                     autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
                   />
-                    <button
-                      type="button"
-                      className="password-toggle"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      onClick={() => setShowPassword((current) => !current)}
-                    >
-                      {showPassword ? '🙈' : '👁'}
-                    </button>
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    onClick={() => setShowPassword((current) => !current)}
+                  >
+                    {showPassword ? '🙈' : '👁'}
+                  </button>
                 </div>
-              </label>
+              </label> : null}
 
-              {authMode === 'signup' ? (
+              {authMode === 'signup' || authMode === 'recovery' ? (
                 <label>
                   Confirm password
                   <div className="password-wrap">
@@ -526,11 +868,7 @@ function App() {
 
               {authMode === 'login' ? (
                 <div className="auth-meta-row">
-                  <label className="checkbox-row">
-                    <input type="checkbox" />
-                    <span>Remember me</span>
-                  </label>
-                  <button type="button" className="text-link" onClick={() => setAuthMessage('Password reset is configured in the auth backend.')}>
+                  <button type="button" className="text-link" onClick={() => { setAuthMode('reset'); setAuthMessage('') }}>
                     Forgot password?
                   </button>
                 </div>
@@ -541,10 +879,15 @@ function App() {
                   ? 'Please wait...'
                   : authMode === 'login'
                     ? 'Log In'
-                    : 'Create Account'}
+                    : authMode === 'signup'
+                      ? 'Create Account'
+                      : authMode === 'reset'
+                        ? 'Send reset link'
+                        : 'Update password'}
               </button>
             </form>
 
+            {authMode === 'login' || authMode === 'signup' ? <>
             <div className="social-auth-divider"><span>or continue with</span></div>
             <div className="social-auth-options">
               {socialProviders.map((provider) => (
@@ -556,23 +899,143 @@ function App() {
                   disabled={authLoading || Boolean(oauthLoading)}
                   aria-label={`Continue with ${provider.name}`}
                 >
-                  <span className={`provider-mark provider-mark-${provider.id}`} aria-hidden="true">
-                    {provider.mark}
-                  </span>
                   <span>{oauthLoading === provider.id ? 'Connecting...' : provider.name}</span>
                 </button>
               ))}
             </div>
+            </> : null}
 
-            {authMessage ? <p className="checkout-message">{authMessage}</p> : null}
+            {authMessage ? <p className="checkout-message" role="alert">{authMessage}</p> : null}
 
-            <p className="auth-switch">
+            {authMode === 'login' || authMode === 'signup' ? <p className="auth-switch">
               {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
               <button type="button" className="text-link" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
                 {authMode === 'login' ? 'Create one' : 'Log In'}
               </button>
-            </p>
+            </p> : <p className="auth-switch">
+              <button type="button" className="text-link" onClick={() => { setAuthMode('login'); setAuthMessage('') }}>
+                Back to Log In
+              </button>
+            </p>}
+            <button
+              type="button"
+              className="auth-help-shortcut"
+              onClick={() => { setHelpContext(authMode); setHelpOpen(true) }}
+            >
+              Need help? Ask Lora
+            </button>
           </div>
+        </div>
+      ) : null}
+
+      {accountModalOpen ? (
+        <div className="auth-modal-backdrop" onClick={() => setAccountModalOpen(false)}>
+          <section className="account-modal" role="dialog" aria-modal="true" aria-labelledby="account-title" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="auth-close" aria-label="Close account" onClick={() => setAccountModalOpen(false)}>
+              ×
+            </button>
+            <div className="auth-header">
+              <span className="eyebrow">Your account</span>
+              <h2 id="account-title">Account settings</h2>
+            </div>
+
+            <div className="auth-toggle account-tabs" aria-label="Account sections">
+              {[
+                ['profile', 'Profile'],
+                ['settings', 'Preferences'],
+                ['billing', 'Billing'],
+              ].map(([tab, label]) => (
+                <button
+                  key={tab}
+                  type="button"
+                  className={accountTab === tab ? 'auth-tab active' : 'auth-tab'}
+                  onClick={() => { setAccountTab(tab); setAccountMessage(''); setAccountError('') }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {accountLoading ? <p className="account-feedback" role="status">Loading your account...</p> : null}
+            {accountError ? <p className="checkout-message" role="alert">{accountError}</p> : null}
+            {accountMessage ? <p className="account-feedback" role="status">{accountMessage}</p> : null}
+
+            {accountTab === 'profile' ? (
+              <form className="auth-form" onSubmit={handleSaveProfile}>
+                <label>
+                  Name
+                  <input
+                    type="text"
+                    value={profileForm.fullName}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, fullName: event.target.value }))}
+                    autoComplete="name"
+                    required
+                  />
+                </label>
+                <label>
+                  Email
+                  <input type="email" value={currentUser?.email || ''} readOnly />
+                </label>
+                <button type="submit" className="checkout-btn" disabled={profileSaving || accountLoading}>
+                  {profileSaving ? 'Saving...' : 'Save profile'}
+                </button>
+              </form>
+            ) : null}
+
+            {accountTab === 'settings' ? (
+              <form className="auth-form" onSubmit={handleSaveProfile}>
+                <label>
+                  Assistant response style
+                  <select
+                    value={profileForm.assistantStyle}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, assistantStyle: event.target.value }))}
+                  >
+                    <option value="balanced">Balanced</option>
+                    <option value="concise">Concise</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </label>
+                <button type="submit" className="checkout-btn" disabled={profileSaving || accountLoading}>
+                  {profileSaving ? 'Saving...' : 'Save preferences'}
+                </button>
+              </form>
+            ) : null}
+
+            {accountTab === 'billing' ? (
+              <div className="account-billing">
+                <div className="account-plan-row">
+                  <span>Current plan</span>
+                  <strong>{plans.find((plan) => plan.id === currentSubscription?.plan)?.name || 'No plan activated'}</strong>
+                </div>
+                <div className="account-plan-row">
+                  <span>Status</span>
+                  <strong>{currentSubscription?.status || 'No subscription'}</strong>
+                </div>
+                {currentSubscription?.current_period_end ? (
+                  <div className="account-plan-row">
+                    <span>Current period ends</span>
+                    <strong>{new Date(currentSubscription.current_period_end).toLocaleDateString()}</strong>
+                  </div>
+                ) : null}
+                {currentSubscription && (currentSubscription.plan !== 'free' || currentSubscription.status !== 'active') ? (
+                  <button type="button" className="checkout-btn" onClick={handleBillingPortal} disabled={checkoutLoading}>
+                    {checkoutLoading ? 'Opening billing...' : 'Manage billing'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="checkout-btn"
+                    onClick={() => { setAccountModalOpen(false); document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' }) }}
+                  >
+                    View plans
+                  </button>
+                )}
+                <button type="button" className="text-link account-refresh" onClick={handleRefreshSubscription} disabled={accountLoading}>
+                  Refresh plan status
+                </button>
+              </div>
+            ) : null}
+          </section>
         </div>
       ) : null}
 
@@ -587,10 +1050,10 @@ function App() {
 
             <div className="hero-actions">
               <button type="button" className="primary-btn" onClick={() => openAuthModal('signup')}>
-                Try LORA AI
+                Create an account
               </button>
               <a href="#features" className="secondary-btn">
-                Explore LORA
+                See what LORA offers
               </a>
             </div>
 
@@ -601,30 +1064,15 @@ function App() {
             </ul>
           </div>
 
-          <div className="hero-visual" aria-label="LORA AI animated interface preview">
-            <div className="visual-shell">
-              <div className="orb-wrap">
-                <div className="orb-glow" aria-hidden="true" />
-                <div className="orb-core" aria-hidden="true" />
-                <div className="orb-ring ring-one" aria-hidden="true" />
-                <div className="orb-ring ring-two" aria-hidden="true" />
-              </div>
-
-              <div className="status-panel">
-                <div>
-                  <span className="status-label">LORA status</span>
-                  <strong>Listening calmly</strong>
-                </div>
-                <span className="status-dot" aria-hidden="true" />
-              </div>
-
-              <div className="wave-panel" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-                <span />
-                <span />
+          <div className="hero-visual">
+            <div className="welcome-shell">
+              <span className="welcome-wordmark">Lora</span>
+              <h2>Hi, I&apos;m Lora. I&apos;m here to assist you.</h2>
+              <p>Ask me anything or choose something below to get started.</p>
+              <div className="welcome-topics">
+                <a href="#learn">Learn</a>
+                <a href="#features">Write</a>
+                <a href="#pricing">Plan</a>
               </div>
             </div>
           </div>
@@ -695,10 +1143,7 @@ function App() {
 
         <section className="section founder-section" id="founder">
           <div className="founder-card">
-            <div className="founder-portrait" aria-label="Founder portrait placeholder">
-              <div className="portrait-ring" />
-              <div className="portrait-core" />
-            </div>
+            <div className="founder-monogram" aria-hidden="true">LRB</div>
 
             <div className="founder-copy">
               <span className="eyebrow">Created by Larry Rimamsikwe Bulus</span>
@@ -716,7 +1161,7 @@ function App() {
         <section className="section download-section" id="download">
           <div className="section-heading compact">
             <span className="eyebrow">Download LORA</span>
-            <h2>Install LORA AI on the devices you use most.</h2>
+            <h2>Desktop and mobile installers are not available yet.</h2>
           </div>
 
           <div className="download-grid">
@@ -727,12 +1172,8 @@ function App() {
                   <span className="platform-note">{item.note}</span>
                 </div>
                 <h3>{item.platform}</h3>
-                <div className="package-list">
-                  {item.packages.map((packageName) => (
-                    <span key={packageName} className="package-badge">{packageName}</span>
-                  ))}
-                </div>
-                <button type="button" className="download-btn">
+                <p className="download-unavailable">LORA has not published an installer for this platform yet.</p>
+                <button type="button" className="download-btn" disabled>
                   {item.action}
                 </button>
               </article>
@@ -755,9 +1196,9 @@ function App() {
                 >
                   <h3>{plan.name}</h3>
                   <div className="price-row">
-                    <span className="price">{plan.price}</span>
+                    <span className="price">{getPlanPrice(plan).price}</span>
                     <span className="billing">
-                      {plan.monthly === 0 ? '2-day trial' : 'Billing interval to be confirmed'}
+                      {getPlanPrice(plan).period}
                     </span>
                   </div>
                   <p>{plan.description}</p>
@@ -786,8 +1227,8 @@ function App() {
                   <strong>{activePlan.name}</strong>
                 </div>
                 <div className="order-price">
-                  <strong>{activePlan.price}</strong>
-                  <span>{activePlan.monthly === 0 ? 'No charge' : 'Billing period to be confirmed'}</span>
+                  <strong>{getPlanPrice(activePlan).price}</strong>
+                  <span>{getPlanPrice(activePlan).period}</span>
                 </div>
               </div>
 
@@ -802,17 +1243,25 @@ function App() {
                 <p>Payment details should be entered only on LORA&apos;s secure payment-provider checkout. We never store your card number or security code.</p>
               </div>
 
-              <button type="button" className="checkout-btn" onClick={handleCheckout}>
-                {isLoggedIn ? 'Continue to secure checkout' : 'Create account to continue'}
+              <button type="button" className="checkout-btn" onClick={handleCheckout} disabled={checkoutLoading}>
+                {checkoutLoading
+                  ? 'Please wait...'
+                  : !isLoggedIn
+                    ? activePlan.id === 'free' ? 'Create account to activate free plan' : 'Create account to continue'
+                    : activePlan.id === 'free' ? 'Activate free plan' : 'Continue to secure checkout'}
               </button>
 
               <p className="billing-terms">
-                {activePlan.monthly === 0
-                  ? 'The free trial does not automatically become a paid plan.'
-                  : 'You will see the billing interval and final amount before authorizing payment.'}
+                {activePlan.id === 'free'
+                  ? 'The free plan requires an account but does not require payment.'
+                  : 'Stripe Checkout will show the configured billing period and amount before payment.'}
               </p>
 
-              {checkoutMessage ? <p className="checkout-message" role="status">{checkoutMessage}</p> : null}
+              {checkoutMessage ? (
+                <p className={`checkout-message ${checkoutMessageType}`} role={checkoutMessageType === 'error' ? 'alert' : 'status'}>
+                  {checkoutMessage}
+                </p>
+              ) : null}
             </aside>
           </div>
         </section>
@@ -852,6 +1301,56 @@ function App() {
           <a href="#pricing">Pricing</a>
         </div>
       </footer>
+
+      {helpOpen ? (
+        <section className={`help-panel${authModalOpen ? ' help-panel-on-auth' : ''}`} role="dialog" aria-modal="false" aria-labelledby="help-title">
+          <header className="help-header">
+            <div>
+              <span className="eyebrow">Website guide</span>
+              <h2 id="help-title">Ask Lora</h2>
+            </div>
+            <button type="button" className="help-close" aria-label="Close help" onClick={() => setHelpOpen(false)}>
+              ×
+            </button>
+          </header>
+          <p className="help-context">
+            {helpContext === 'billing' ? 'Here on Pricing' : helpContext === 'account' ? 'In account settings' : 'Around LORA'}
+          </p>
+          <div className="help-messages" role="log" aria-live="polite" aria-relevant="additions">
+            {helpMessages.map((message, index) => (
+              <p key={`${message.role}-${index}`} className={`help-message ${message.role}`}>
+                {message.text}
+              </p>
+            ))}
+          </div>
+          <div className="help-suggestions" aria-label="Suggested questions">
+            <button type="button" onClick={() => sendHelpMessage('How do I create an account?')}>Create an account</button>
+            <button type="button" onClick={() => sendHelpMessage('How do I manage billing?')}>Manage billing</button>
+          </div>
+          <form className="help-form" onSubmit={(event) => { event.preventDefault(); sendHelpMessage() }}>
+            <label className="visually-hidden" htmlFor="help-question">Ask a question about this website</label>
+            <input
+              id="help-question"
+              type="text"
+              value={helpInput}
+              onChange={(event) => setHelpInput(event.target.value)}
+              placeholder="Ask about accounts or plans"
+              autoComplete="off"
+            />
+            <button type="submit" disabled={!helpInput.trim()}>Send</button>
+          </form>
+        </section>
+      ) : null}
+
+      <button
+        type="button"
+        className="help-trigger"
+        aria-expanded={helpOpen}
+        aria-controls="help-title"
+        onClick={() => setHelpOpen((open) => !open)}
+      >
+        {helpOpen ? 'Close help' : 'Need help?'}
+      </button>
     </div>
   )
 }

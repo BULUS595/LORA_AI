@@ -1,0 +1,7 @@
+project_id = "lora-ai-website"
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.get-plan-catalog]
+verify_jwt = false
